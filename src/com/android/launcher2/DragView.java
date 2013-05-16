@@ -17,39 +17,40 @@
 
 package com.android.launcher2;
 
-import android.content.Context;
-import android.content.res.TypedArray;
+import android.animation.ValueAnimator;
+import android.animation.ValueAnimator.AnimatorUpdateListener;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.PixelFormat;
 import android.graphics.Point;
-import android.os.IBinder;
-import android.util.AttributeSet;
-import android.util.Log;
-import android.view.Gravity;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.view.View;
-import android.view.ViewGroup;
-import android.view.KeyEvent;
-import android.view.WindowManager;
-import android.view.WindowManagerImpl;
+import android.view.animation.DecelerateInterpolator;
 
-public class DragView extends View implements TweenCallback {
-    // Number of pixels to add to the dragged item for scaling.  Should be even for pixel alignment.
-    private static final int DRAG_SCALE = 40;
+import com.android.launcher.R;
+
+public class DragView extends View {
+    private static float sDragAlpha = 1f;
 
     private Bitmap mBitmap;
+    private Bitmap mCrossFadeBitmap;
     private Paint mPaint;
     private int mRegistrationX;
     private int mRegistrationY;
 
-    SymmetricalLinearTween mTween;
-    private float mScale;
-    private float mAnimationScale = 1.0f;
+    private Point mDragVisualizeOffset = null;
+    private Rect mDragRegion = null;
+    private DragLayer mDragLayer = null;
+    private boolean mHasDrawn = false;
+    private float mCrossFadeProgress = 0f;
 
-    private WindowManager.LayoutParams mLayoutParams;
-    private WindowManager mWindowManager;
+    ValueAnimator mAnim;
+    private float mOffsetX = 0.0f;
+    private float mOffsetY = 0.0f;
+    private float mInitialScale = 1f;
 
     /**
      * Construct the drag view.
@@ -57,29 +58,110 @@ public class DragView extends View implements TweenCallback {
      * The registration point is the point inside our view that the touch events should
      * be centered upon.
      *
-     * @param context A context
+     * @param launcher The Launcher instance
      * @param bitmap The view that we're dragging around.  We scale it up when we draw it.
      * @param registrationX The x coordinate of the registration point.
      * @param registrationY The y coordinate of the registration point.
      */
-    public DragView(Context context, Bitmap bitmap, int registrationX, int registrationY,
-            int left, int top, int width, int height) {
-        super(context);
+    public DragView(Launcher launcher, Bitmap bitmap, int registrationX, int registrationY,
+            int left, int top, int width, int height, final float initialScale) {
+        super(launcher);
+        mDragLayer = launcher.getDragLayer();
+        mInitialScale = initialScale;
 
-        mWindowManager = WindowManagerImpl.getDefault();
-        
-        mTween = new SymmetricalLinearTween(false, 110 /*ms duration*/, this);
+        final Resources res = getResources();
+        final float offsetX = res.getDimensionPixelSize(R.dimen.dragViewOffsetX);
+        final float offsetY = res.getDimensionPixelSize(R.dimen.dragViewOffsetY);
+        final float scaleDps = res.getDimensionPixelSize(R.dimen.dragViewScale);
+        final float scale = (width + scaleDps) / width;
 
-        Matrix scale = new Matrix();
-        float scaleFactor = width;
-        scaleFactor = mScale = (scaleFactor + DRAG_SCALE) / scaleFactor;
-        scale.setScale(scaleFactor, scaleFactor);
+        // Set the initial scale to avoid any jumps
+        setScaleX(initialScale);
+        setScaleY(initialScale);
 
-        mBitmap = Bitmap.createBitmap(bitmap, left, top, width, height, scale, true);
+        // Animate the view into the correct position
+        mAnim = LauncherAnimUtils.ofFloat(0.0f, 1.0f);
+        mAnim.setDuration(150);
+        mAnim.addUpdateListener(new AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator animation) {
+                final float value = (Float) animation.getAnimatedValue();
+
+                final int deltaX = (int) ((value * offsetX) - mOffsetX);
+                final int deltaY = (int) ((value * offsetY) - mOffsetY);
+
+                mOffsetX += deltaX;
+                mOffsetY += deltaY;
+                setScaleX(initialScale + (value * (scale - initialScale)));
+                setScaleY(initialScale + (value * (scale - initialScale)));
+                if (sDragAlpha != 1f) {
+                    setAlpha(sDragAlpha * value + (1f - value));
+                }
+
+                if (getParent() == null) {
+                    animation.cancel();
+                } else {
+                    setTranslationX(getTranslationX() + deltaX);
+                    setTranslationY(getTranslationY() + deltaY);
+                }
+            }
+        });
+
+        mBitmap = Bitmap.createBitmap(bitmap, left, top, width, height);
+        setDragRegion(new Rect(0, 0, width, height));
 
         // The point in our scaled bitmap that the touch events are located
-        mRegistrationX = registrationX + (DRAG_SCALE / 2);
-        mRegistrationY = registrationY + (DRAG_SCALE / 2);
+        mRegistrationX = registrationX;
+        mRegistrationY = registrationY;
+
+        // Force a measure, because Workspace uses getMeasuredHeight() before the layout pass
+        int ms = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+        measure(ms, ms);
+        mPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+    }
+
+    public float getOffsetY() {
+        return mOffsetY;
+    }
+
+    public int getDragRegionLeft() {
+        return mDragRegion.left;
+    }
+
+    public int getDragRegionTop() {
+        return mDragRegion.top;
+    }
+
+    public int getDragRegionWidth() {
+        return mDragRegion.width();
+    }
+
+    public int getDragRegionHeight() {
+        return mDragRegion.height();
+    }
+
+    public void setDragVisualizeOffset(Point p) {
+        mDragVisualizeOffset = p;
+    }
+
+    public Point getDragVisualizeOffset() {
+        return mDragVisualizeOffset;
+    }
+
+    public void setDragRegion(Rect r) {
+        mDragRegion = r;
+    }
+
+    public Rect getDragRegion() {
+        return mDragRegion;
+    }
+
+    public float getInitialScale() {
+        return mInitialScale;
+    }
+
+    public void updateInitialScaleToCurrentScale() {
+        mInitialScale = getScaleX();
     }
 
     @Override
@@ -89,42 +171,70 @@ public class DragView extends View implements TweenCallback {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (false) {
-            // for debugging
+        @SuppressWarnings("all") // suppress dead code warning
+        final boolean debug = false;
+        if (debug) {
             Paint p = new Paint();
             p.setStyle(Paint.Style.FILL);
-            p.setColor(0xaaffffff);
+            p.setColor(0x66ffffff);
             canvas.drawRect(0, 0, getWidth(), getHeight(), p);
         }
-        float scale = mAnimationScale;
-        if (scale < 0.999f) { // allow for some float error
-            float width = mBitmap.getWidth();
-            float offset = (width-(width*scale))/2;
-            canvas.translate(offset, offset);
-            canvas.scale(scale, scale);
+
+        mHasDrawn = true;
+        boolean crossFade = mCrossFadeProgress > 0 && mCrossFadeBitmap != null;
+        if (crossFade) {
+            int alpha = crossFade ? (int) (255 * (1 - mCrossFadeProgress)) : 255;
+            mPaint.setAlpha(alpha);
         }
         canvas.drawBitmap(mBitmap, 0.0f, 0.0f, mPaint);
+        if (crossFade) {
+            mPaint.setAlpha((int) (255 * mCrossFadeProgress));
+            canvas.save();
+            float sX = (mBitmap.getWidth() * 1.0f) / mCrossFadeBitmap.getWidth();
+            float sY = (mBitmap.getHeight() * 1.0f) / mCrossFadeBitmap.getHeight();
+            canvas.scale(sX, sY);
+            canvas.drawBitmap(mCrossFadeBitmap, 0.0f, 0.0f, mPaint);
+            canvas.restore();
+        }
     }
 
-    @Override
-    protected void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
-        mBitmap.recycle();
+    public void setCrossFadeBitmap(Bitmap crossFadeBitmap) {
+        mCrossFadeBitmap = crossFadeBitmap;
     }
 
-    public void onTweenValueChanged(float value, float oldValue) {
-        mAnimationScale = (1.0f+((mScale-1.0f)*value))/mScale;
+    public void crossFade(int duration) {
+        ValueAnimator va = LauncherAnimUtils.ofFloat(0f, 1f);
+        va.setDuration(duration);
+        va.setInterpolator(new DecelerateInterpolator(1.5f));
+        va.addUpdateListener(new AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator animation) {
+                mCrossFadeProgress = animation.getAnimatedFraction();
+            }
+        });
+        va.start();
+    }
+
+    public void setColor(int color) {
+        if (mPaint == null) {
+            mPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        }
+        if (color != 0) {
+            mPaint.setColorFilter(new PorterDuffColorFilter(color, PorterDuff.Mode.SRC_ATOP));
+        } else {
+            mPaint.setColorFilter(null);
+        }
         invalidate();
     }
 
-    public void onTweenStarted() {
+    public boolean hasDrawn() {
+        return mHasDrawn;
     }
 
-    public void onTweenFinished() {
-    }
-
-    public void setPaint(Paint paint) {
-        mPaint = paint;
+    @Override
+    public void setAlpha(float alpha) {
+        super.setAlpha(alpha);
+        mPaint.setAlpha((int) (255 * alpha));
         invalidate();
     }
 
@@ -132,51 +242,54 @@ public class DragView extends View implements TweenCallback {
      * Create a window containing this view and show it.
      *
      * @param windowToken obtained from v.getWindowToken() from one of your views
-     * @param touchX the x coordinate the user touched in screen coordinates
-     * @param touchY the y coordinate the user touched in screen coordinates
+     * @param touchX the x coordinate the user touched in DragLayer coordinates
+     * @param touchY the y coordinate the user touched in DragLayer coordinates
      */
-    public void show(IBinder windowToken, int touchX, int touchY) {
-        WindowManager.LayoutParams lp;
-        int pixelFormat;
+    public void show(int touchX, int touchY) {
+        mDragLayer.addView(this);
 
-        pixelFormat = PixelFormat.TRANSLUCENT;
-
-        lp = new WindowManager.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                touchX-mRegistrationX, touchY-mRegistrationY,
-                WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL,
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                    /*| WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM*/,
-                pixelFormat);
-//        lp.token = mStatusBarView.getWindowToken();
-        lp.gravity = Gravity.LEFT | Gravity.TOP;
-        lp.token = windowToken;
-        lp.setTitle("DragView");
-        mLayoutParams = lp;
-
-        mWindowManager.addView(this, lp);
-
-        mAnimationScale = 1.0f/mScale;
-        mTween.start(true);
+        // Start the pick-up animation
+        DragLayer.LayoutParams lp = new DragLayer.LayoutParams(0, 0);
+        lp.width = mBitmap.getWidth();
+        lp.height = mBitmap.getHeight();
+        lp.customPosition = true;
+        setLayoutParams(lp);
+        setTranslationX(touchX - mRegistrationX);
+        setTranslationY(touchY - mRegistrationY);
+        // Post the animation to skip other expensive work happening on the first frame
+        post(new Runnable() {
+                public void run() {
+                    mAnim.start();
+                }
+            });
     }
-    
+
+    public void cancelAnimation() {
+        if (mAnim != null && mAnim.isRunning()) {
+            mAnim.cancel();
+        }
+    }
+
+    public void resetLayoutParams() {
+        mOffsetX = mOffsetY = 0;
+        requestLayout();
+    }
+
     /**
      * Move the window containing this view.
      *
-     * @param touchX the x coordinate the user touched in screen coordinates
-     * @param touchY the y coordinate the user touched in screen coordinates
+     * @param touchX the x coordinate the user touched in DragLayer coordinates
+     * @param touchY the y coordinate the user touched in DragLayer coordinates
      */
     void move(int touchX, int touchY) {
-        WindowManager.LayoutParams lp = mLayoutParams;
-        lp.x = touchX - mRegistrationX;
-        lp.y = touchY - mRegistrationY;
-        mWindowManager.updateViewLayout(this, lp);
+        setTranslationX(touchX - mRegistrationX + (int) mOffsetX);
+        setTranslationY(touchY - mRegistrationY + (int) mOffsetY);
     }
 
     void remove() {
-        mWindowManager.removeView(this);
+        if (getParent() != null) {
+            mDragLayer.removeView(DragView.this);
+        }
     }
 }
 

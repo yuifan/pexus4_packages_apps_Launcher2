@@ -16,12 +16,13 @@
 
 package com.android.launcher2;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-
 import android.content.ContentValues;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.util.Log;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 
 /**
  * Represents an item in the launcher.
@@ -38,7 +39,7 @@ class ItemInfo {
     /**
      * One of {@link LauncherSettings.Favorites#ITEM_TYPE_APPLICATION},
      * {@link LauncherSettings.Favorites#ITEM_TYPE_SHORTCUT},
-     * {@link LauncherSettings.Favorites#ITEM_TYPE_USER_FOLDER}, or
+     * {@link LauncherSettings.Favorites#ITEM_TYPE_FOLDER}, or
      * {@link LauncherSettings.Favorites#ITEM_TYPE_APPWIDGET}.
      */
     int itemType;
@@ -77,9 +78,29 @@ class ItemInfo {
     int spanY = 1;
 
     /**
-     * Indicates whether the item is a gesture.
+     * Indicates the minimum X cell span.
      */
-    boolean isGesture = false;
+    int minSpanX = 1;
+
+    /**
+     * Indicates the minimum Y cell span.
+     */
+    int minSpanY = 1;
+
+    /**
+     * Indicates that this item needs to be updated in the db
+     */
+    boolean requiresDbUpdate = false;
+
+    /**
+     * Title of the item
+     */
+    CharSequence title;
+
+    /**
+     * The position of the item in a drag-and-drop operation.
+     */
+    int[] dropPos = null;
 
     ItemInfo() {
     }
@@ -93,6 +114,23 @@ class ItemInfo {
         screen = info.screen;
         itemType = info.itemType;
         container = info.container;
+        // tempdebug:
+        LauncherModel.checkItemInfo(this);
+    }
+
+    /** Returns the package name that the intent will resolve to, or an empty string if
+     *  none exists. */
+    static String getPackageName(Intent intent) {
+        if (intent != null) {
+            String packageName = intent.getPackage();
+            if (packageName == null && intent.getComponent() != null) {
+                packageName = intent.getComponent().getPackageName();
+            }
+            if (packageName != null) {
+                return packageName;
+            }
+        }
+        return "";
     }
 
     /**
@@ -102,14 +140,17 @@ class ItemInfo {
      */
     void onAddToDatabase(ContentValues values) { 
         values.put(LauncherSettings.BaseLauncherColumns.ITEM_TYPE, itemType);
-        if (!isGesture) {
-            values.put(LauncherSettings.Favorites.CONTAINER, container);
-            values.put(LauncherSettings.Favorites.SCREEN, screen);
-            values.put(LauncherSettings.Favorites.CELLX, cellX);
-            values.put(LauncherSettings.Favorites.CELLY, cellY);
-            values.put(LauncherSettings.Favorites.SPANX, spanX);
-            values.put(LauncherSettings.Favorites.SPANY, spanY);
-        }
+        values.put(LauncherSettings.Favorites.CONTAINER, container);
+        values.put(LauncherSettings.Favorites.SCREEN, screen);
+        values.put(LauncherSettings.Favorites.CELLX, cellX);
+        values.put(LauncherSettings.Favorites.CELLY, cellY);
+        values.put(LauncherSettings.Favorites.SPANX, spanX);
+        values.put(LauncherSettings.Favorites.SPANY, spanY);
+    }
+
+    void updateValuesWithCoordinates(ContentValues values, int cellX, int cellY) {
+        values.put(LauncherSettings.Favorites.CELLX, cellX);
+        values.put(LauncherSettings.Favorites.CELLY, cellY);
     }
 
     static byte[] flattenBitmap(Bitmap bitmap) {
@@ -134,12 +175,20 @@ class ItemInfo {
             values.put(LauncherSettings.Favorites.ICON, data);
         }
     }
-    
+
+    /**
+     * It is very important that sub-classes implement this if they contain any references
+     * to the activity (anything in the view hierarchy etc.). If not, leaks can result since
+     * ItemInfo objects persist across rotation and can hence leak by holding stale references
+     * to the old view hierarchy / activity.
+     */
     void unbind() {
     }
 
     @Override
     public String toString() {
-        return "Item(id=" + this.id + " type=" + this.itemType + ")";
+        return "Item(id=" + this.id + " type=" + this.itemType + " container=" + this.container
+            + " screen=" + screen + " cellX=" + cellX + " cellY=" + cellY + " spanX=" + spanX
+            + " spanY=" + spanY + " dropPos=" + dropPos + ")";
     }
 }
